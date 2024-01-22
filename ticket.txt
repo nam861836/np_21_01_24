@@ -1,0 +1,11 @@
+----------------------------------------
+Username: nam
+Ticket Code: QMZOSH-QMZOSH-QMZOSH-QMZOSH-QMZOSH-
+Flight Number: FL005
+Seat Class: B
+Number of Seats: 5
+Ticket Price: 1100
+Departure: CityI
+Destination: CityJ
+Departure Date: 2024-05-01
+Return Date: 2024-05-06

@@ -8,8 +8,79 @@
 #define BUFFER_SIZE 1024
 #define DATABASE_NAME "airticket.db"
 
-int user_id=-1;
+int user_id = -1;
+char user[50]; 
 int execute_query(sqlite3* db, const char* query);
+
+void print_ticket_to_file(sqlite3* db, int client_socket, const char* ticket_code, const char* filename) {
+    FILE* file = fopen(filename, "w");
+    
+    if (file == NULL) {
+        // Handle file opening error
+        perror("Error opening file");
+        return;
+    }
+
+    char query[100];
+    snprintf(query, sizeof(query), "SELECT * FROM Tickets WHERE ticket_code = '%s';", ticket_code);
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, query, -1, &stmt, 0) == SQLITE_OK) {
+        int result = sqlite3_step(stmt);
+        if (result == SQLITE_ROW) {
+            char flight_num[20], seat_class[10];
+            int num_seat, ticket_price, user_id;
+
+            user_id = sqlite3_column_int(stmt, 1);
+            strcpy(flight_num, sqlite3_column_text(stmt, 2));
+            strcpy(seat_class, sqlite3_column_text(stmt, 3));
+            num_seat = sqlite3_column_int(stmt, 4);
+            ticket_price = sqlite3_column_int(stmt, 5);
+
+
+            fprintf(file, "----------------------------------------\n");
+            fprintf(file, "Username: %s\n", user);
+            fprintf(file, "Ticket Code: %s\n", ticket_code);
+            fprintf(file, "Flight Number: %s\n", flight_num);
+            fprintf(file, "Seat Class: %s\n", seat_class);
+            fprintf(file, "Number of Seats: %d\n", num_seat);
+            fprintf(file, "Ticket Price: %d\n", ticket_price);
+
+            // Additional flight information if needed
+            // Retrieve flight information
+            char flight_query[100];
+            snprintf(flight_query, sizeof(flight_query), "SELECT * FROM Flights WHERE flight_num = '%s';", flight_num);
+
+            sqlite3_stmt* flight_stmt;
+            if (sqlite3_prepare_v2(db, flight_query, -1, &flight_stmt, 0) == SQLITE_OK) {
+                int flight_result = sqlite3_step(flight_stmt);
+                if (flight_result == SQLITE_ROW) {
+                    char departure[50], destination[50], departure_date[20], return_date[20];
+                    strcpy(departure, sqlite3_column_text(flight_stmt, 6));
+                    strcpy(destination, sqlite3_column_text(flight_stmt, 7));
+                    strcpy(departure_date, sqlite3_column_text(flight_stmt, 8));
+                    strcpy(return_date, sqlite3_column_text(flight_stmt, 9));
+
+                    fprintf(file, "Departure: %s\n", departure);
+                    fprintf(file, "Destination: %s\n", destination);
+                    fprintf(file, "Departure Date: %s\n", departure_date);
+                    fprintf(file, "Return Date: %s\n", return_date);
+                }
+                sqlite3_finalize(flight_stmt);
+            }
+            // End of additional flight information
+
+            send(client_socket, "Ticket printed to file\n", 24, 0);
+        } else {
+            send(client_socket, "Ticket not found\n", 17, 0);
+        }
+        sqlite3_finalize(stmt);
+    } else {
+        send(client_socket, "Error querying database\n", 24, 0);
+    }
+
+    fclose(file);
+}
 
 int reduce_available_seats(sqlite3* db, const char* flight_num, const char* seat_class, int num_seat) {
     char update_query[100];
@@ -392,6 +463,7 @@ int main(int argc, char *argv[]) {
                 // Handle login
                 if (login_user(db, username, password)) {
                     user_id = get_user_id(db, username);
+                    strcpy(user, username);
                     send(client_socket, "Login success\n", 14, 0);
                     
                 } else {
@@ -537,6 +609,20 @@ int main(int argc, char *argv[]) {
                 } else {
                     send(client_socket, "Please login first\n", 19, 0);
                 } 
+            } else if (strncmp(buffer, "print", 5) == 0){
+                if (user_id != -1) {
+                    char ticket_code[1000];
+                    sqlite3_stmt* stmt;
+
+                    if (sscanf(buffer, "print ticket %s", ticket_code) == 1) {
+                    print_ticket_to_file(db, client_socket, ticket_code, "ticket.txt");
+                    } else {
+                        send(client_socket, "Invalid print command", sizeof("Invalid print command"), 0);
+                    }
+                } else {
+                    send(client_socket, "Please login first\n", 19, 0);
+                } 
+
             } else if (strncmp(buffer, "change", 6) == 0) {
                 // Change a ticket
                 if (user_id != -1) {
