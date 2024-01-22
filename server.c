@@ -11,6 +11,68 @@
 int user_id=-1;
 int execute_query(sqlite3* db, const char* query);
 
+int get_credit_card_info(sqlite3* db, int user_id, char* credit_card, char* cvv) {
+    char select_query[100];
+    snprintf(select_query, sizeof(select_query), "SELECT credit_card, cvv FROM users WHERE id = %d;", user_id);
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, select_query, -1, &stmt, 0) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* credit_card_value = sqlite3_column_text(stmt, 3);
+            const unsigned char* cvv_value = sqlite3_column_text(stmt, 4);
+
+            strcpy(credit_card, (char*)credit_card_value);
+            strcpy(cvv, (char*)cvv_value);
+
+            sqlite3_finalize(stmt);
+            return 0; // Success
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return -1; // Return -1 if user not found or an error occurred
+}
+
+
+int makePayment(sqlite3* db, const char* ticket_code, const char* credit_card, const char* cvv, int user_id) {
+    char search_query1[100], search_query2[100], update_query[100], insert_query[100];
+    int isPaid = 0;
+    sqlite3_stmt* stmt;
+    // Check if the ticket exists
+    snprintf(search_query1, sizeof(search_query1), "SELECT * FROM Tickets WHERE ticket_code = '%s';", ticket_code);
+    if (sqlite3_prepare_v2(db, search_query1, -1, &stmt, 0) == SQLITE_OK) {
+        int result = sqlite3_step(stmt);
+        if (result != SQLITE_ROW) return -1;
+    }
+
+    snprintf(search_query2, sizeof(search_query2), "SELECT credit_card, cvv FROM users WHERE id = %d;", user_id);
+    if (sqlite3_prepare_v2(db, search_query2, -1, &stmt, 0) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const unsigned char* credit_card_value = sqlite3_column_text(stmt, 3);
+            const unsigned char* cvv_value = sqlite3_column_text(stmt, 4);
+
+            strcpy(credit_card, (char*)credit_card_value);
+            strcpy(cvv, (char*)cvv_value);
+
+            sqlite3_finalize(stmt);
+            return 0; // Success
+        }
+        sqlite3_finalize(stmt);
+    } else {
+        snprintf(insert_query, sizeof(insert_query), "UPDATE users SET credit_card = '%s' AND ccv = '%s' where user_id = %d", credit_card, cvv, user_id);
+        if (execute_query(db, insert_query) != SQLITE_OK) {
+            return -2; // Failed to insert credit card information
+        }
+    }
+
+    // Update ticket as paid
+    snprintf(update_query, sizeof(update_query), "UPDATE Tickets SET isPaid = 1 WHERE ticket_code = '%s';", ticket_code);
+    if (execute_query(db, update_query) == SQLITE_OK) {
+        isPaid = 1; // Ticket paid successfully
+    }
+    return isPaid;
+}
+
 void generate_random_string(char *random_string, size_t length) {
     const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const size_t charset_size = sizeof(charset) - 1;
@@ -42,14 +104,19 @@ int get_user_id(sqlite3* db, const char* username) {
     return -1; // Return -1 if user not found or an error occurred
 }
 
-float get_ticket_price(sqlite3* db, const char* flight_num) {
+int get_ticket_price(sqlite3* db, const char* flight_num, const char* seat_class) {
     char select_query[100];
+    int ticket_price;
     snprintf(select_query, sizeof(select_query), "SELECT * FROM Flights WHERE flight_num = '%s';", flight_num);
 
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, select_query, -1, &stmt, 0) == SQLITE_OK) {
         if (sqlite3_step(stmt) == SQLITE_ROW) {
-            int ticket_price = sqlite3_column_double(stmt, 4);
+            if (strcmp(seat_class, "A") == 0){
+            ticket_price = sqlite3_column_double(stmt, 4);
+            } else if (strcmp(seat_class, "B") == 0){
+            ticket_price = sqlite3_column_double(stmt, 5);
+            }
             sqlite3_finalize(stmt);
             return ticket_price;
         }
@@ -59,6 +126,25 @@ float get_ticket_price(sqlite3* db, const char* flight_num) {
     return -1; // Return -1 if user not found or an error occurred
 }
 
+int check_available_seats(sqlite3* db, const char* flight_num, const char* seat_class, int num_seat) {
+    char select_query[100];
+    snprintf(select_query, sizeof(select_query), "SELECT * FROM Flights WHERE flight_num = '%s';", flight_num);
+    int available_seats;
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, select_query, -1, &stmt, 0) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (strcmp(seat_class, "A") == 0){
+            available_seats = sqlite3_column_int(stmt, 2);
+            } else if (strcmp(seat_class, "B") == 0){
+            available_seats = sqlite3_column_int(stmt, 3);
+            }
+            sqlite3_finalize(stmt);
+            return (available_seats >= num_seat);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return 0; // Return 0 if flight or seat class not found or an error occurred
+}
 
 int book_ticket(sqlite3* db, const char* ticket_code, int user_id, const char* flight_num, char *seat_class, int num_seat, float ticket_price) {
     char insert_query[200];
@@ -162,6 +248,7 @@ int search_flights(const char *departure_point, const char *destination_point, c
 }
 
 int main(int argc, char *argv[]) {
+
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -177,13 +264,6 @@ int main(int argc, char *argv[]) {
     sqlite3* db;
     if (sqlite3_open(DATABASE_NAME, &db) != SQLITE_OK) {
         fprintf(stderr, "Error opening database: %s\n", sqlite3_errmsg(db));
-        exit(EXIT_FAILURE);
-    }
-
-    // Create a table for user data if it doesn't exist
-    const char* create_table_query = "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, password TEXT);";
-    if (execute_query(db, create_table_query) != SQLITE_OK) {
-        sqlite3_close(db);
         exit(EXIT_FAILURE);
     }
 
@@ -272,34 +352,59 @@ int main(int argc, char *argv[]) {
             } else if (strncmp(buffer, "book", 4) == 0) {
                 char flight_num[20], seat_class[10], ticket_code[1000];
                 int num_seat;
-                float ticket_price;
-                // Book a ticket
-                // int user_id = get_user_id(db, username);
+                int ticket_price;
+
                 if (user_id != -1) {
-                    if (sscanf(buffer, "book %s %s %d", flight_num, seat_class, &num_seat) == 3) {
+                    if (sscanf(buffer, "book %s %s %d %s %s", flight_num, seat_class, &num_seat) == 3) {
+                        if (strcmp(seat_class, "A") == 0 || strcmp(seat_class, "B") == 0){
                         char str[10];
-                        ticket_price = num_seat * get_ticket_price(db, flight_num);
+                        if (check_available_seats(db, flight_num, seat_class, num_seat) == 0) {
+                            send(client_socket, "Not enough seats\n", 17, 0);
+                        } else {
+                        ticket_price = num_seat * get_ticket_price(db, flight_num, seat_class);
                         for (int i = 0; i < num_seat; i++) {
-                            char str[7]; // 6 characters + 1 for null-terminator
-
-                            // Clear ticket_code before each iteration
+                            char str[7]; 
                             ticket_code[0] = '\0';
-
                             for (int j = 0; j < num_seat; j++) {
                                 generate_random_string(str, 6);
                                 strcat(ticket_code, str);
                                 strcat(ticket_code, "-");
                             }
                         }
-                        
-                        if (book_ticket(db, ticket_code, user_id, flight_num, seat_class, num_seat, ticket_price) == SQLITE_OK) {
-                            send(client_socket, "Booking success\n", 17, 0);
-                        } else {
-                            send(client_socket, "Booking failed\n", 16, 0);
+                            if (book_ticket(db, ticket_code, user_id, flight_num, seat_class, num_seat, ticket_price) == SQLITE_OK) {
+                                char announcement[1000];
+                                snprintf(announcement, sizeof(announcement), "Booking pending: %s\n", ticket_code);
+                                send(client_socket, announcement, sizeof(announcement), 0);
+
+                            } else {
+                                send(client_socket, "Booking failed\n", 16, 0);
+                            }
                         }
-                        
+                        } else {
+                            send(client_socket, "Invalid seat class\n", 19, 0);
+                        }
                     } else {
                         send(client_socket, "Invalid book command", sizeof("Invalid book command"), 0);
+                    }
+                } else {
+                    send(client_socket, "Please login first\n", 19, 0);
+                }
+            } else if (strncmp(buffer, "pay", 3) == 0) { 
+                if (user_id != -1) {
+                    char ticket_code[1000], credit_card[20], cvv[3];
+                    if (sscanf(buffer, "pay %s %s %s", ticket_code, credit_card, cvv) == 3) {
+                        int payment_result = makePayment(db, ticket_code, credit_card, cvv, user_id);
+                        if (payment_result == 1) {
+                            send(client_socket, "Ticket paid\n", 12, 0);
+                        } else if (payment_result == 0) {
+                            send(client_socket, "Failed to pay ticket\n", 22, 0);
+                        } else if (payment_result == -1) {
+                            send(client_socket, "Ticket not found\n", 17, 0);
+                        } else if (payment_result == -2) {
+                            send(client_socket, "Failed to insert credit card information\n", 42, 0);
+                        }
+                    } else {
+                        send(client_socket, "Invalid pay command", sizeof("Invalid pay command"), 0);
                     }
                 } else {
                     send(client_socket, "Please login first\n", 19, 0);
@@ -362,10 +467,43 @@ int main(int argc, char *argv[]) {
                     }
                 } else {
                     send(client_socket, "Please login first\n", 19, 0);
-                }
+                } 
+            } else if (strncmp(buffer, "change", 6) == 0) {
+                // Change a ticket
+                if (user_id != -1) {
+                    char ticket_code[1000], flight_num[20], seat_class[10];
+                    int num_seat;
+                    int ticket_price;
+                    if (sscanf(buffer, "change ticket %s %s %s %d", ticket_code, flight_num, seat_class, &num_seat) == 4) {
+                        char search_query[100], update_query[100];
+                        snprintf(search_query, sizeof(search_query), "SELECT * FROM Tickets WHERE ticket_code = '%s';", ticket_code);
+                        
+                        if (execute_query(db, search_query) != SQLITE_OK) {
+                            send(client_socket, "Ticket not found\n", 17, 0);
+                        } else {
+                            ticket_price = num_seat * get_ticket_price(db, flight_num, seat_class);
+                            snprintf(update_query, sizeof(update_query), "UPDATE Tickets SET flight_num = '%s', seat_class = '%s', num_seat = %d, ticket_price = %f WHERE ticket_code = '%s';", flight_num, seat_class, num_seat, ticket_price, ticket_code);
+                            
+                            if (execute_query(db, update_query) == SQLITE_OK) {
+                                send(client_socket, "Ticket changed\n", 15, 0);
+                            } else {
+                                send(client_socket, "Failed to change ticket\n", 25, 0);
+                            }
+                        }
+                    } else {
+                        send(client_socket, "Invalid change command", sizeof("Invalid change command"), 0);
+                    }
+                } else {
+                    send(client_socket, "Please login first\n", 19, 0);
+                } 
+            } else if (strncmp(buffer, "exit", 4) == 0) {
+                // Exit
+                send(client_socket, "Goodbye\n", 8, 0);
+                break;
             } else {
                 send(client_socket, "Invalid command\n", 16, 0);
             }
+
         }
         else {
             send(client_socket, "Invalid command format\n", 23, 0);
