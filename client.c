@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 10000
 void search_flights(int client_socket, const char *search_query) {
     send(client_socket, search_query, strlen(search_query), 0);
 

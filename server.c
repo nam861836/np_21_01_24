@@ -9,8 +9,61 @@
 #define DATABASE_NAME "airticket.db"
 
 int user_id = -1;
+int user_type = 2;
+ 
 char user[50]; 
 int execute_query(sqlite3* db, const char* query);
+
+int get_user_ids_from_query(sqlite3 *db, const char *query, int *user_ids) {
+    sqlite3_stmt *stmt;
+    int num_users = 0;
+
+    if (sqlite3_prepare_v2(db, query, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (num_users < 100) {
+                user_ids[num_users++] = sqlite3_column_int(stmt, 0);
+            } else {
+                // Handle the case where the number of users exceeds MAX_USERS
+                // You may want to adjust this based on your requirements
+                break;
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return num_users;
+}
+
+void see_notifications(sqlite3* db, int user_id, int client_socket) {
+    char select_query[100];
+    snprintf(select_query, sizeof(select_query), "SELECT notification FROM Notifications WHERE user_id = %d;", user_id);
+
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, select_query, -1, &stmt, 0) == SQLITE_OK) {
+        char result[BUFFER_SIZE];
+        strcpy(result, "Notifications:\n");
+
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+
+            for (int i = 0; i < sqlite3_column_count(stmt); i++) {
+                const unsigned char *column_value = sqlite3_column_text(stmt, i);
+                const char *column_name = sqlite3_column_name(stmt, i);
+                sprintf(result, "\nSTT: %d\n", i + 1);
+                strcat(result, (char *)column_value);
+                strcat(result, "\n");
+            }
+            strcat(result, "\n");
+        }
+
+        if (strcmp(result, "Notifications:\n") == 0) {
+            strcpy(result, "No notifications found.\n");
+        }
+
+        sqlite3_finalize(stmt);
+        send(client_socket, result, strlen(result), 0);
+    }
+}
+
 
 void print_ticket_to_file(sqlite3* db, int client_socket, const char* ticket_code, const char* filename) {
     FILE* file = fopen(filename, "w");
@@ -319,17 +372,17 @@ int register_user(sqlite3* db, const char* username, const char* password) {
 
 int login_user(sqlite3* db, const char* username, const char* password) {
     char select_query[100];
-    snprintf(select_query, sizeof(select_query), "SELECT * FROM users WHERE username = '%s' AND password = '%s';", username, password);
 
+    snprintf(select_query, sizeof(select_query), "SELECT * FROM users WHERE username = '%s' AND password = '%s';", username, password);
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(db, select_query, -1, &stmt, 0) == SQLITE_OK) {
         int result = (sqlite3_step(stmt) == SQLITE_ROW) ? 1 : 0;
         sqlite3_finalize(stmt);
         return result;
     }
-
     return 0;
 }
+
 int logout_user() {
     return 1;  // Successful logout for demonstration purposes
 }
@@ -346,7 +399,9 @@ int search_flights(const char *departure_point, const char *destination_point, c
     }
 
     char query[512];
-    sprintf(query, "SELECT flight_num, company, departure_point, destination_point, departure_date, return_date, seat_class_A, seat_class_B, price_A, price_B FROM Flights WHERE departure_point='%s' AND destination_point='%s' AND departure_date='%s' AND return_date='%s';\n",
+    char date[10];
+    strcpy(date, departure_date);
+    sprintf(query, "SELECT flight_num, company, departure_point, destination_point, departure_time, return_time, seat_class_A, seat_class_B, price_A, price_B FROM Flights WHERE departure_point='%s' AND destination_point='%s' AND substr(departure_time, 1, 10)='%s' AND substr(return_time, 1, 10)='%s';\n",
             departure_point, destination_point, departure_date, return_date);
 
     sqlite3_stmt *stmt;
@@ -461,19 +516,129 @@ int main(int argc, char *argv[]) {
                 }
             } else if (strcmp(command, "login") == 0) {
                 // Handle login
-                if (login_user(db, username, password)) {
+                if (login_user(db, username, password) == 1) {
+                    if(strcmp(username, "admin") == 0){
+                        user_type = 1;
+                        send(client_socket, "Login admin success\n", 21, 0);
+                    } else {
+                        user_type = 2;
+                        send(client_socket, "Login success\n", 14, 0);
+                    }
                     user_id = get_user_id(db, username);
                     strcpy(user, username);
-                    send(client_socket, "Login success\n", 14, 0);
+                    
                     
                 } else {
                     send(client_socket, "Login failed\n", 13, 0);
                 }
             } else if (strcmp(command, "logout") == 0) {
                 if (logout_user()) {
+                user_id = -1;
                 send(client_socket, "Logout success\n", 15, 0);
                 } else {
                 send(client_socket, "Logout failed\n", 14, 0);
+                }
+            } else if (strncmp(buffer, "display", 7) == 0){
+                if(user_id != -1 && user_type == 1){
+                    char select_query[100];
+                    snprintf(select_query, sizeof(select_query), "SELECT * FROM Flights;");
+
+                    sqlite3_stmt* stmt;
+                    if (sqlite3_prepare_v2(db, select_query, -1, &stmt, 0) == SQLITE_OK) {
+                        char result[10000];
+                        strcpy(result, "Flights found:\n");
+
+                        while (sqlite3_step(stmt) == SQLITE_ROW) {
+                            for (int i = 0; i < sqlite3_column_count(stmt); i++) {
+                                const unsigned char *column_value = sqlite3_column_text(stmt, i);
+                                const char *column_name = sqlite3_column_name(stmt, i);
+
+                                strcat(result, column_name);
+                                strcat(result, ": ");
+                                strcat(result, (char *)column_value);
+                                strcat(result, "\n");
+                            }
+                            strcat(result, "\n");
+                        }
+
+                        if (strcmp(result, "Flights found:\n") == 0) {
+                            strcpy(result, "No flights found.\n");
+                        }
+
+                        sqlite3_finalize(stmt);
+                        send(client_socket, result, strlen(result), 0);
+                    }
+                } else {
+                    send(client_socket, "Please login as admin first\n", 29, 0);
+                }
+            } else if (strncmp(buffer, "delete", 6) == 0){
+                if (user_id != -1 && user_type == 1){
+                    char flight_num[20];
+                    int delay_time;
+                    sscanf(buffer, "delete flight %s", flight_num);
+                    char ticket_query[100];
+                    snprintf(ticket_query, sizeof(ticket_query), "SELECT user_id FROM Tickets WHERE flight_num = '%s';", flight_num);
+                    int user_ids[100]; // Define MAX_USERS as the maximum number of users that can book a flight
+                    int num_users = get_user_ids_from_query(db, ticket_query, user_ids); // Implement this function to execute the query and retrieve user_ids
+
+                    char noti_query[1000];
+                        for (int i = 0; i < num_users; i++) {
+                            int temp_user = user_ids[i];
+                            snprintf(noti_query, sizeof(noti_query), "INSERT INTO Notifications(user_id, notification) VALUES (%d, 'Flight '%s' has been cancelled! Sorry for inconvenience. We will make a refund later!');", temp_user, flight_num);
+                            execute_query(db, noti_query);
+
+                        }
+
+                    // Step 3: Update delayTime in Flights table
+                    char delete_query[100], result1[1000], result2[1000];
+                    snprintf(delete_query, sizeof(delete_query), "DELETE FROM Flights WHERE flight_num = '%s';", flight_num);
+                    if (execute_query(db, delete_query) == SQLITE_OK) {
+                        strcat(result1, "Delete from table Flights success\n");
+                    } else {
+                        strcat(result2, "Delete from table Flights failed\n");
+                    }
+
+                    char delete2_query[100];
+                    snprintf(delete2_query, sizeof(delete2_query), "DELETE FROM Tickets WHERE flight_num = '%s';", flight_num);
+                    if (execute_query(db, delete2_query) == SQLITE_OK) {
+                        strcat(result1, "Delete from table Tickets success\n");
+                        send(client_socket, result1, strlen(result1), 0);
+                    } else {
+                        strcat(result2, "Delete from table Tickets failed\n");
+                        send(client_socket, result2, strlen(result2), 0);
+                    }
+
+
+                } else {
+                    send(client_socket, "Please login as admin first\n", 29, 0);
+                }
+            } else if (strncmp(buffer, "delay", 5) == 0){
+                if (user_id != -1 && user_type == 1){
+                    char flight_num[20];
+                    int delay_time;
+                    sscanf(buffer, "delay %s %d", flight_num, &delay_time);
+                    char ticket_query[100];
+                    snprintf(ticket_query, sizeof(ticket_query), "SELECT user_id FROM Tickets WHERE flight_num = '%s';", flight_num);
+                    int user_ids[100]; // Define MAX_USERS as the maximum number of users that can book a flight
+                    int num_users = get_user_ids_from_query(db, ticket_query, user_ids); // Implement this function to execute the query and retrieve user_ids
+
+                    // Step 3: Update delayTime in Flights table
+                    char update_query[100];
+                    snprintf(update_query, sizeof(update_query), "UPDATE Flights SET delayTime = %d WHERE flight_num = '%s';", delay_time, flight_num);
+                    if (execute_query(db, update_query) == SQLITE_OK) {
+                        send(client_socket, "Delay success\n", 14, 0);
+
+                        // Step 4: Insert notifications for each user
+                        char noti_query[1000];
+                        for (int i = 0; i < num_users; i++) {
+                            int temp_user = user_ids[i];
+                            snprintf(noti_query, sizeof(noti_query), "INSERT INTO Notifications(user_id, notification) VALUES (%d, 'Flight %s has been delayed %d minutes! Sorry for inconvenience.');", temp_user, flight_num, delay_time);
+                            execute_query(db, noti_query);
+
+                        }
+                    } else {
+                        send(client_socket, "Delay failed\n", 13, 0);
+                    }
                 }
             } else if (strncmp(buffer, "search", 6) == 0) {
             // Search
@@ -486,11 +651,12 @@ int main(int argc, char *argv[]) {
                 send(client_socket, "Invalid search command", sizeof("Invalid search command"), 0);
             }
             } else if (strncmp(buffer, "book", 4) == 0) {
+
                 char flight_num[20], seat_class[10], ticket_code[1000];
                 int num_seat;
                 int ticket_price;
 
-                if (user_id != -1) {
+                if (user_id != -1 && user_type == 2) {
                     if (sscanf(buffer, "book %s %s %d", flight_num, seat_class, &num_seat) == 3) {
                         if (strcmp(seat_class, "A") == 0 || strcmp(seat_class, "B") == 0){
                         char str[10];
@@ -526,14 +692,19 @@ int main(int argc, char *argv[]) {
                 } else {
                     send(client_socket, "Please login first\n", 19, 0);
                 }
-            } else if (strncmp(buffer, "pay", 3) == 0) { 
-                if (user_id != -1) {
+            } else if (strncmp(buffer, "pay", 3) == 0) {
+                if (user_id != -1 && user_type == 2) {
                     char ticket_code[1000]; 
                     int credit_card, cvv;
                     if (sscanf(buffer, "pay %s %d %d", ticket_code, &credit_card, &cvv) == 3) {
                         int payment_result = makePayment(db, ticket_code, credit_card, cvv, user_id);
                         if (payment_result == 1) {
+                            char noti_query[1000];
+
                             send(client_socket, "Ticket paid\n", 12, 0);
+                            snprintf(noti_query, sizeof(noti_query), "INSERT INTO Notifications(user_id, notification) VALUES (%d, 'Booking successfully. Ticket %s has been paid!');", user_id, ticket_code);
+                            execute_query(db, noti_query);
+
                         } else if (payment_result == 0) {
                             send(client_socket, "Failed to pay ticket\n", 22, 0);
                         } else if (payment_result == -1) {
@@ -549,7 +720,7 @@ int main(int argc, char *argv[]) {
                 }
             } else if (strncmp(buffer, "view", 4) == 0) {
                 // View booked tickets
-                if (user_id != -1) {
+                if (user_id != -1 && user_type == 2) {
                     char select_query[100];
                     snprintf(select_query, sizeof(select_query), "SELECT * FROM Tickets WHERE user_id = %d;", user_id);
 
@@ -583,7 +754,7 @@ int main(int argc, char *argv[]) {
                 }
             } else if (strncmp(buffer, "cancel", 6) == 0) {
                 // Cancel a ticket
-                if (user_id != -1) {
+                if (user_id != -1 && user_type == 2) {
                     char ticket_code[1000];
                     sqlite3_stmt* stmt;
 
@@ -610,7 +781,7 @@ int main(int argc, char *argv[]) {
                     send(client_socket, "Please login first\n", 19, 0);
                 } 
             } else if (strncmp(buffer, "print", 5) == 0){
-                if (user_id != -1) {
+                if (user_id != -1 && user_type == 2) {
                     char ticket_code[1000];
                     sqlite3_stmt* stmt;
 
@@ -623,9 +794,16 @@ int main(int argc, char *argv[]) {
                     send(client_socket, "Please login first\n", 19, 0);
                 } 
 
+            } else if (strncmp(buffer, "see", 3) == 0){
+                if (user_id != -1 && user_type == 2) {
+                    see_notifications(db, user_id, client_socket);
+                } else {
+                    send(client_socket, "Please login first\n", 19, 0);
+                }
+                
             } else if (strncmp(buffer, "change", 6) == 0) {
                 // Change a ticket
-                if (user_id != -1) {
+                if (user_id != -1 && user_type == 2) {
                     char ticket_code[1000], flight_num[20], new_seat_class[10];
                     char old_seat_class[10];
                     int old_num_seat, ticket_price, result, new_num_seat;
@@ -684,4 +862,3 @@ int main(int argc, char *argv[]) {
 
         return 0;
 }
-
