@@ -14,6 +14,19 @@ int user_type = 2;
 char user[50]; 
 int execute_query(sqlite3* db, const char* query);
 
+void *handle_client(void *arg) {
+    int client_socket = *((int *)arg);
+    char buffer[BUFFER_SIZE];
+
+    // Your existing code for handling a single client goes here...
+
+    // Close the client socket when done
+    close(client_socket);
+
+    // Exit the thread
+    pthread_exit(NULL);
+}
+
 int get_user_ids_from_query(sqlite3 *db, const char *query, int *user_ids) {
     sqlite3_stmt *stmt;
     int num_users = 0;
@@ -348,7 +361,11 @@ int is_login(sqlite3* db, int client_socket, char* username){
 }
 
 int parse_search_command(const char *search_command, char *departure_point, char *destination_point, char *departure_date, char *return_date) {
-    return sscanf(search_command, "search %49s %49s %19s %19s", departure_point, destination_point, departure_date, return_date);
+    return sscanf(search_command, "search_flight %49s %49s %19s %19s", departure_point, destination_point, departure_date, return_date);
+}
+
+int parse_search_company(const char *search_command, char *company, char *departure_point, char *destination_point, char *departure_date, char *return_date) {
+    return sscanf(search_command, "search_airline %30s %50s %50s %19s %19s", company, departure_point, destination_point, departure_date, return_date);
 }
 
 int execute_query(sqlite3* db, const char* query) {
@@ -436,6 +453,57 @@ int search_flights(const char *departure_point, const char *destination_point, c
 
     return 0;
 }
+
+int search_airline(const char *company, const char *departure_point, const char *destination_point, const char *departure_date, const char *return_date, char *result) {
+    sqlite3 *db;
+    int rc;
+
+    rc = sqlite3_open(DATABASE_NAME, &db);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Cannot open database: %s\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return -1;
+    }
+
+    char query[512];
+    char date[10];
+    strcpy(date, departure_date);
+    sprintf(query, "SELECT company, flight_num, departure_point, destination_point, departure_time, return_time, seat_class_A, seat_class_B, price_A, price_B FROM Flights WHERE company = '%s' AND departure_point='%s' AND destination_point='%s' AND substr(departure_time, 1, 10)='%s' AND substr(return_time, 1, 10)='%s';\n",
+            company, departure_point, destination_point, departure_date, return_date);
+
+    sqlite3_stmt *stmt;
+    rc = sqlite3_prepare_v2(db, query, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "Cannot prepare statement: %s\n", sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return -1;
+    }
+
+    strcpy(result, "Flights found:\n");
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        for (int i = 0; i < sqlite3_column_count(stmt); i++) {
+            const unsigned char *column_value = sqlite3_column_text(stmt, i);
+            const char *column_name = sqlite3_column_name(stmt, i);
+
+            strcat(result, column_name);
+            strcat(result, ": ");
+            strcat(result, (char *)column_value);
+            strcat(result, "\n");
+        }
+        strcat(result, "\n");
+    }
+
+    if (strcmp(result, "Flights found:\n") == 0) {
+        strcpy(result, "No flights found.\n");
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    return 0;
+}
+
 
 int main(int argc, char *argv[]) {
 
@@ -582,15 +650,17 @@ int main(int argc, char *argv[]) {
                     int num_users = get_user_ids_from_query(db, ticket_query, user_ids); // Implement this function to execute the query and retrieve user_ids
 
                     char noti_query[1000];
-                        for (int i = 0; i < num_users; i++) {
+                    for (int i = 0; i < num_users; i++) {
                             int temp_user = user_ids[i];
-                            snprintf(noti_query, sizeof(noti_query), "INSERT INTO Notifications(user_id, notification) VALUES (%d, 'Flight '%s' has been cancelled! Sorry for inconvenience. We will make a refund later!');", temp_user, flight_num);
+                            snprintf(noti_query, sizeof(noti_query), "INSERT INTO Notifications(user_id, notification) VALUES (%d, 'Flight %s has been cancelled! Sorry for inconvenience. We will make a refund later!');", temp_user, flight_num);
                             execute_query(db, noti_query);
 
-                        }
+                    }
 
                     // Step 3: Update delayTime in Flights table
-                    char delete_query[100], result1[1000], result2[1000];
+                    char delete_query[100];
+                    char result1[1000] = "";
+                    char result2[1000] = "";
                     snprintf(delete_query, sizeof(delete_query), "DELETE FROM Flights WHERE flight_num = '%s';", flight_num);
                     if (execute_query(db, delete_query) == SQLITE_OK) {
                         strcat(result1, "Delete from table Flights success\n");
@@ -608,6 +678,36 @@ int main(int argc, char *argv[]) {
                         send(client_socket, result2, strlen(result2), 0);
                     }
 
+                } else {
+                    send(client_socket, "Please login as admin first\n", 29, 0);
+                }
+            } else if (strncmp(buffer, "modify", 6) == 0) {
+                if (user_id != -1 && user_type == 1){
+                    char flight_num[20], departure_time[20], departure_date[20], return_date[20], return_time[20];
+                    sscanf(buffer, "modify %s %s %s %s %s", flight_num, departure_date, departure_time, return_date, return_time);
+                    char ticket_query[100];
+                    char depart[40] = "";
+                    char ret[40] = "";
+
+                    snprintf(ticket_query, sizeof(ticket_query), "SELECT user_id FROM Tickets WHERE flight_num = '%s';", flight_num);
+                    int user_ids[100]; // Define MAX_USERS as the maximum number of users that can book a flight
+                    int num_users = get_user_ids_from_query(db, ticket_query, user_ids); // Implement this function to execute the query and retrieve user_ids
+
+                    char noti_query[1000];
+                    for (int i = 0; i < num_users; i++) {
+                            int temp_user = user_ids[i];
+                            snprintf(noti_query, sizeof(noti_query), "INSERT INTO Notifications(user_id, notification) VALUES (%d, 'Flight schedule of %s has been changed! Sorry for inconvenience.');", temp_user, flight_num);
+                            execute_query(db, noti_query);
+
+                    }
+                    char update_query[1000];
+                    snprintf(update_query, sizeof(update_query), "UPDATE Flights SET departure_time = datetime('%s %s'), return_time = datetime('%s %s') WHERE flight_num = '%s';", departure_date, departure_time, return_date, return_time, flight_num);
+
+                    if (execute_query(db, update_query) == SQLITE_OK) {
+                        send(client_socket, "Change schedule success\n", 25, 0);
+                    } else {
+                        send(client_socket, "Change schedule failed\n", 24, 0);
+                    }
 
                 } else {
                     send(client_socket, "Please login as admin first\n", 29, 0);
@@ -640,16 +740,25 @@ int main(int argc, char *argv[]) {
                         send(client_socket, "Delay failed\n", 13, 0);
                     }
                 }
-            } else if (strncmp(buffer, "search", 6) == 0) {
+            } else if (strncmp(buffer, "search_flight", 13) == 0) {
             // Search
             char departure_point[50], destination_point[50], departure_date[20], return_date[20];
-            if (parse_search_command(buffer, departure_point, destination_point, departure_date, return_date) == 4) {
+                if (parse_search_command(buffer, departure_point, destination_point, departure_date, return_date) == 4) {
+                    char search_result[BUFFER_SIZE];
+                    search_flights(departure_point, destination_point, departure_date, return_date, search_result);
+                    send(client_socket, search_result, strlen(search_result), 0);
+                } else {
+                    send(client_socket, "Invalid search command", sizeof("Invalid search command"), 0);
+                }
+            } else if (strncmp(buffer, "search_airline", 14) == 0){
+                char departure_point[50], destination_point[50], departure_date[20], return_date[20], company[50];
+                if (parse_search_company(buffer, company, departure_point, destination_point, departure_date, return_date) == 5) {
                 char search_result[BUFFER_SIZE];
-                search_flights(departure_point, destination_point, departure_date, return_date, search_result);
+                search_airline(company, departure_point, destination_point, departure_date, return_date, search_result);
                 send(client_socket, search_result, strlen(search_result), 0);
-            } else {
-                send(client_socket, "Invalid search command", sizeof("Invalid search command"), 0);
-            }
+                } else {
+                    send(client_socket, "Invalid search command", sizeof("Invalid search command"), 0);
+                }
             } else if (strncmp(buffer, "book", 4) == 0) {
 
                 char flight_num[20], seat_class[10], ticket_code[1000];
@@ -819,7 +928,7 @@ int main(int argc, char *argv[]) {
                             
                         // Get current ticket information
                             strcpy(old_seat_class, sqlite3_column_text(stmt, 3));
-                            //printf("%s\n", old_seat_class);
+
                             old_num_seat = sqlite3_column_int(stmt, 4);
                             strcpy(flight_num, sqlite3_column_text(stmt, 2));
 
