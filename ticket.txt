@@ -1,0 +1,11 @@
+----------------------------------------
+Username: guma
+Ticket Code: 8AU7AF-
+Flight Number: FL013
+Seat Class: A
+Number of Seats: 1
+Ticket Price: 175
+Departure: CityI
+Destination: CityJ
+Departure Date: 2024-05-01 08:00:00
+Return Date: 2024-05-06 19:00:00
