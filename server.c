@@ -566,7 +566,7 @@ void *handle_client(void *arg)
                     sqlite3_stmt *stmt;
                     if (sscanf(buffer, "change %s %s %d", ticket_code, new_seat_class, &new_num_seat) == 3)
                     {
-                        char search_query[100], update_query[100];
+                        char search_query[100], update_query[1000];
                         snprintf(search_query, sizeof(search_query), "SELECT * FROM Tickets WHERE ticket_code = '%s';", ticket_code);
                         if (sqlite3_prepare_v2(db, search_query, -1, &stmt, 0) == SQLITE_OK)
                         {
