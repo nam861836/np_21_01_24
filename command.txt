@@ -1,0 +1,18 @@
+register huy huy
+login huy huy
+search_flight CityA CityB 2024-02-01 2024-02-01
+search_airline Airline1 CityA CityB 2024-02-01 2024-02-01
+search_airline Airline8 CityA CityB 2024-02-01 2024-02-01
+book FL011 A 1
+view ticket details
+pay <ticket_code> <credit_card> <cvv>
+view ticket details
+print ticket <ticket_code>
+cancel ticket <ticket_code>
+change <ticket_code> <seat_class> <num_seat>
+- Admin:
+login admin admin
+display all flights
+delay <flight_num> <delayTime>
+modify <flight_num> <departure_date> <departure_time> <return_date> <return_time>
+delete flight <flight_num>

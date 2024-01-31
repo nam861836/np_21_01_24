@@ -502,6 +502,8 @@ void *handle_client(void *arg)
                     if (sscanf(buffer, "print ticket %s", ticket_code) == 1)
                     {
                         print_ticket_to_file(db, client_socket, ticket_code, "ticket.txt", user);
+                        // Send the ticket file to the client
+                        //send_file_to_client(client_socket, "ticket.txt");
                     }
                     else
                     {
@@ -632,6 +634,37 @@ void *handle_client(void *arg)
 
     // Exit the thread
     pthread_exit(NULL);
+}
+
+void send_file_to_client(int client_socket, const char *filename) {
+    FILE *file = fopen(filename, "rb");
+
+    if (file == NULL) {
+        perror("Error opening file");
+        return;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    rewind(file);
+
+    char *buffer = (char *)malloc(file_size);
+    if (buffer == NULL) {
+        perror("Memory allocation error");
+        fclose(file);
+        return;
+    }
+
+    fread(buffer, 1, file_size, file);
+    fclose(file);
+
+    // Send the file size to the client
+    send(client_socket, &file_size, sizeof(long), 0);
+
+    // Send the file data to the client
+    send(client_socket, buffer, file_size, 0);
+
+    free(buffer);
 }
 
 int get_user_ids_from_query(sqlite3 *db, const char *query, int *user_ids)
