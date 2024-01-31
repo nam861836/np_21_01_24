@@ -10,14 +10,10 @@
 #define BUFFER_SIZE 1024
 #define DATABASE_NAME "airticket.db"
 
-int user_id = -1;
-int user_type = 2;
-char user[50];
-
 int get_user_ids_from_query(sqlite3 *db, const char *query, int *user_ids);
 int execute_query(sqlite3 *db, const char *query);
 int get_noti_from_user(sqlite3 *db, const char *query, int *user_id);
-void print_ticket_to_file(sqlite3 *db, int client_socket, const char *ticket_code, const char *filename);
+void print_ticket_to_file(sqlite3 *db, int client_socket, const char *ticket_code, const char *filename, const char* user);
 int reduce_available_seats(sqlite3 *db, const char *flight_num, const char *seat_class, int num_seat);
 int increase_available_seats(sqlite3 *db, const char *flight_num, const char *seat_class, int num_seat);
 int makePayment(sqlite3 *db, const char *ticket_code, int credit_card, int cvv, int user_id);
@@ -37,6 +33,10 @@ int search_airline(const char *company, const char *departure_point, const char 
 
 void *handle_client(void *arg)
 {
+    int user_id = -1;
+    int user_type = 2;
+    char user[50];
+
     int client_socket = *((int *)arg);
     char buffer[BUFFER_SIZE];
 
@@ -57,7 +57,7 @@ void *handle_client(void *arg)
         }
 
         buffer[bytes_received] = '\0'; // Null-terminate the received data
-        printf("Received from client: %s", buffer);
+        printf("Received from client %d: %s", client_socket, buffer);
 
         // Parse the input and handle register or login
         char command[20], username[50], password[50];
@@ -309,7 +309,7 @@ void *handle_client(void *arg)
             else if (strncmp(buffer, "book", 4) == 0)
             {
 
-                char flight_num[20], seat_class[10], ticket_code[1000];
+                char flight_num[20], seat_class[10], ticket_code[50];
                 int num_seat;
                 int ticket_price;
 
@@ -319,7 +319,7 @@ void *handle_client(void *arg)
                     {
                         if (strcmp(seat_class, "A") == 0 || strcmp(seat_class, "B") == 0)
                         {
-                            char str[10];
+                            //char str[10];
                             if (check_available_seats(db, flight_num, seat_class, num_seat) == 0)
                             {
                                 send(client_socket, "Not enough seats\n", 17, 0);
@@ -370,7 +370,7 @@ void *handle_client(void *arg)
             {
                 if (user_id != -1 && user_type == 2)
                 {
-                    char ticket_code[1000];
+                    char ticket_code[50];
                     int credit_card, cvv;
                     if (sscanf(buffer, "pay %s %d %d", ticket_code, &credit_card, &cvv) == 3)
                     {
@@ -454,7 +454,7 @@ void *handle_client(void *arg)
                 // Cancel a ticket
                 if (user_id != -1 && user_type == 2)
                 {
-                    char ticket_code[1000];
+                    char ticket_code[50];
                     sqlite3_stmt *stmt;
 
                     if (sscanf(buffer, "cancel ticket %s", ticket_code) == 1)
@@ -501,7 +501,7 @@ void *handle_client(void *arg)
 
                     if (sscanf(buffer, "print ticket %s", ticket_code) == 1)
                     {
-                        print_ticket_to_file(db, client_socket, ticket_code, "ticket.txt");
+                        print_ticket_to_file(db, client_socket, ticket_code, "ticket.txt", user);
                     }
                     else
                     {
@@ -560,13 +560,13 @@ void *handle_client(void *arg)
                 // Change a ticket
                 if (user_id != -1 && user_type == 2)
                 {
-                    char ticket_code[1000], flight_num[20], new_seat_class[10];
+                    char ticket_code[50], flight_num[20], new_seat_class[10];
                     char old_seat_class[10];
-                    int old_num_seat, ticket_price, result, new_num_seat;
+                    int old_num_seat, ticket_price, new_num_seat;
                     sqlite3_stmt *stmt;
                     if (sscanf(buffer, "change %s %s %d", ticket_code, new_seat_class, &new_num_seat) == 3)
                     {
-                        char search_query[100], update_query[100];
+                        char search_query[100];
                         snprintf(search_query, sizeof(search_query), "SELECT * FROM Tickets WHERE ticket_code = '%s';", ticket_code);
                         if (sqlite3_prepare_v2(db, search_query, -1, &stmt, 0) == SQLITE_OK)
                         {
@@ -577,7 +577,7 @@ void *handle_client(void *arg)
                             }
                             else
                             {
-
+                                char update_query[1000];
                                 // Get current ticket information
                                 strcpy(old_seat_class, sqlite3_column_text(stmt, 3));
 
@@ -589,13 +589,14 @@ void *handle_client(void *arg)
                                 int new_ticket_price = new_num_seat * get_ticket_price(db, flight_num, new_seat_class);
 
                                 snprintf(update_query, sizeof(update_query), "UPDATE Tickets SET seat_class = '%s', num_seat = %d, ticket_price = %d WHERE ticket_code = '%s';",
-                                         new_seat_class, new_num_seat, (new_num_seat * get_ticket_price(db, flight_num, new_seat_class)), ticket_code);
+                                         new_seat_class, new_num_seat, new_ticket_price, ticket_code);
                                 if (execute_query(db, update_query) != SQLITE_OK)
                                 {
                                     send(client_socket, "Change Failed\n", 15, 0); // Error updating ticket information
-                                }
+                                } else {
                                 reduce_available_seats(db, flight_num, new_seat_class, new_num_seat);
                                 send(client_socket, "Ticket changed\n", 15, 0);
+                                }
                             }
                         }
                     }
@@ -675,7 +676,7 @@ int get_noti_from_user(sqlite3 *db, const char *query, int *user_id)
     return num_noti;
 }
 
-void print_ticket_to_file(sqlite3 *db, int client_socket, const char *ticket_code, const char *filename)
+void print_ticket_to_file(sqlite3 *db, int client_socket, const char *ticket_code, const char *filename, const char* user)
 {
     FILE *file = fopen(filename, "w");
 

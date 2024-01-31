@@ -1,11 +1,11 @@
 ----------------------------------------
-Username: guma
-Ticket Code: 8AU7AF-
-Flight Number: FL013
+Username: huy
+Ticket Code: CHQI1P-CHQI1P-
+Flight Number: FL011
 Seat Class: A
-Number of Seats: 1
-Ticket Price: 175
-Departure: CityI
-Destination: CityJ
-Departure Date: 2024-05-01 08:00:00
-Return Date: 2024-05-06 19:00:00
+Number of Seats: 2
+Ticket Price: 400
+Departure: CityA
+Destination: CityB
+Departure Date: 2024-02-01 08:00:00
+Return Date: 2024-02-01 15:00:00
