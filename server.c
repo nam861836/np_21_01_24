@@ -57,7 +57,7 @@ void *handle_client(void *arg)
         }
 
         buffer[bytes_received] = '\0'; // Null-terminate the received data
-        printf("Received from client %d: %s", client_socket, buffer);
+        printf("Received from client %d: %s", user_id, buffer);
 
         // Parse the input and handle register or login
         char command[20], username[50], password[50];
